@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  labels:
+    app: auth-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auth-service
+  template:
+    metadata:
+      labels:
+        app: auth-service
+    spec:
+      containers:
+        - name: auth-service
+          image: gym-auth-service:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 4000
+          env:
+            - name: PORT
+              value: "4000"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: auth-service-secrets
+                  key: jwt-secret
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            initialDelaySeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            initialDelaySeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+spec:
+  selector:
+    app: auth-service
+  ports:
+    - port: 4000
+      targetPort: 4000
+  # ClusterIP (the default type) means this is ONLY reachable from inside
+  # the cluster — no external access. Only the gateway should ever talk
+  # to this service directly. Compare to api-gateway's Service, which uses
+  # NodePort specifically because it's the one thing clients hit directly.
+  type: ClusterIP
+---
+# A Kubernetes Secret for the JWT signing key. In local dev this is a
+# plain hardcoded value — fine for now. Before any real deployment, this
+# needs to move to a proper secrets manager (AWS Secrets Manager / SSM
+# Parameter Store once you're on EKS) rather than living in a YAML file.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: auth-service-secrets
+type: Opaque
+stringData:
+  jwt-secret: "dev-secret-change-me"
