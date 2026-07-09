@@ -1,4 +1,4 @@
-# gym-auth-service (plain JavaScript)
+# Auth Service
 
 Handles account creation, login, and JWT issuance/verification for the
 whole platform. This is the only service that knows the JWT signing
