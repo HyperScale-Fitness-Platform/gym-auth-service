@@ -1,9 +1,9 @@
-const express = require("express");
 const dotenv = require("dotenv");
+dotenv.config();
+
+const express = require("express");
 const authRoutes = require("./routes/auth.routes");
 const { errorHandler } = require("./middleware/errorHandler.middleware");
-
-dotenv.config();
 
 const app = express();
 

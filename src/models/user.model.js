@@ -1,42 +1,34 @@
-// This is the MODEL layer — the only place that knows how user data is
-// actually stored. Right now it's a plain JavaScript array living in
-// memory (meaning: it resets every time you restart the service). This is
-// intentional for getting started fast with zero database setup.
-//
-// TODO before this is anything close to production-ready:
-// replace this whole file's internals with real queries against Postgres
-// (using a library like "pg" or an ORM like Prisma/Knex), WITHOUT changing
-// the function names/signatures below — that way nothing else in the
-// codebase (controllers, services) needs to change when you do this swap.
+const pool = require("../config/database");
 
-const crypto = require("crypto");
 
-// our "database," for now
-const users = [];
-
-// Find a user by email. Returns undefined if not found — same behavior
-// a real database query would give you (no matching row).
-function findByEmail(email) {
-  return users.find((u) => u.email === email);
+async function findByEmail(email) {
+  const result = await pool.query(
+    "SELECT * FROM users WHERE email = $1",
+    [email]
+  );
+  return result.rows[0];
 }
 
-// Find a user by id.
-function findById(id) {
-  return users.find((u) => u.id === id);
+async function findById(id) {
+  const result = await pool.query(
+    "SELECT * FROM users WHERE id = $1",
+    [id]
+  );
+  return result.rows[0];
 }
 
-// Create a new user record and add it to our "database."
-// passwordHash is expected to already be hashed (never store plain
-// passwords) — hashing happens in the service layer, not here.
-function create({ email, passwordHash, role }) {
-  const user = {
-    id: crypto.randomUUID(), // generates a unique id, built into Node itself
-    email,
-    passwordHash,
-    role,
-  };
-  users.push(user);
-  return user;
+// Postgres generate the id automatically via the DEFAULT gen_random_uuid()
+// We also don't pass created_at or is_active — their DEFAULT values in the schema handle that.
+async function create({ email, passwordHash, role, phone }) {
+  const result = await pool.query(
+    `INSERT INTO users (email, password_hash, role, phone)
+     VALUES ($1, $2, $3, $4)
+     RETURNING *`,
+    [email, passwordHash, role, phone || null]
+  );
+  // RETURNING * gives us back the full row Postgres just inserted,
+  // including the auto-generated id and created_at.
+  return result.rows[0];
 }
 
 module.exports = { findByEmail, findById, create };
