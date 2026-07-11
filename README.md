@@ -147,44 +147,122 @@ This service uses `ClusterIP` (not `NodePort`) — it is intentionally
 **not** reachable directly from your laptop once deployed to the cluster.
 Only the gateway talks to it.
 
+The database is its own dedicated Postgres instance, defined in
+`k8s/dev/database/`, separate from this service's own app manifests in
+`k8s/dev/`. 
+
+### Order matters
+
+The database must exist and be reachable **before** the app deployment is
+applied, since the app connects to it on startup. Follow this exact order
+on a fresh cluster:
+
 ```bash
+cd gym-auth-service
+
+# 1. bring up the database
+kubectl apply -f k8s/dev/database/secret.yaml
+kubectl apply -f k8s/dev/database/pvc.yaml
+kubectl apply -f k8s/dev/database/deployment.yaml
+kubectl apply -f k8s/dev/database/service.yaml
+
+# wait until the postgres pod shows Running before continuing
+kubectl get pods -n gym-dev -w
+# Ctrl+C once auth-postgres-xxxxxxxx-xxxxx is Running
+
+# 2. create the users table inside the fresh database
+kubectl exec -it deployment/auth-postgres -n gym-dev -- \
+  psql -U $(kubectl get secret auth-postgres-credentials -n gym-dev -o jsonpath='{.data.POSTGRES_USER}' | base64 -d) \
+  -d auth_db
+```
+
+Paste this schema once connected, then `\q` to exit:
+```sql
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+CREATE TABLE users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email VARCHAR(255) UNIQUE NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  role VARCHAR(50) NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  phone VARCHAR(20),
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+```
+
+```bash
+# 4. build and load the app image
 docker build -t gym-auth-service:dev .
 kind load docker-image gym-auth-service:dev --name gym-dev
-kubectl apply -f k8s/deployment.yaml
+
+# 5. apply the app's own config, secret, deployment, service
+kubectl apply -f k8s/dev/configmap.yaml
+kubectl apply -f k8s/dev/secret.yaml
+kubectl apply -f k8s/dev/deployment.yaml
+kubectl apply -f k8s/dev/service.yaml
+
+# 6. confirm both the app and its database are running
+kubectl get pods -n gym-dev
 ```
 
-To test it directly anyway while debugging:
+### Testing it through the gateway
+
 ```bash
-kubectl port-forward svc/auth-service 4000:4000
+curl -X POST http://localhost:8080/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@test.com","password":"secret123","role":"customer","phone":"01000000000"}'
 ```
 
-**Note:** when running inside the cluster, `DATABASE_URL` needs to point at
-wherever Postgres is actually reachable from inside Kubernetes — either a
-Postgres pod/service running in-cluster, or (once on AWS) an RDS endpoint.
-Update the `DATABASE_URL` value in `k8s/deployment.yaml`'s env vars
-accordingly; the value in your local `.env` only applies when running
-directly on your laptop via `npm run dev`.
+A successful JSON response confirms the full chain is working: your
+laptop → gateway pod (NodePort) → auth-service pod (ClusterIP, internal
+DNS) → auth-postgres pod (ClusterIP, internal DNS).
 
-## Debugging checklist
+### Applying changes after editing any k8s YAML
 
-If you hit connection or auth errors when starting the service, check in
-this order:
+Editing a `.yaml` file on disk changes nothing in the cluster by itself.
+`kubectl apply -f <file>` is what actually pushes a change in.
+`kubectl rollout restart` only restarts a pod using whatever spec was
+**already applied** — it does not re-read your files. After any change to
+`configmap.yaml`, `secret.yaml`, or `deployment.yaml`:
 
-1. Is Postgres actually running? `docker ps` should show `gym-postgres`.
-2. Is `.env` actually being loaded before anything reads `process.env`?
-   `dotenv.config()` must be the very first line executed in `index.js` —
-   before any other `require`, since those cascade down into
-   `config/database.js`, which reads `DATABASE_URL` the moment it's loaded.
-3. Are numeric env values being parsed? Anything from `process.env` is
-   always a string — `SALT_ROUNDS` must be converted with
-   `parseInt(process.env.SALT_ROUNDS, 10)`, not used as-is.
-4. Does the `users` table actually exist? Reconnect with `psql` (step 3
-   above) and run `\dt` to list tables.
+```bash
+kubectl apply -f k8s/dev/configmap.yaml
+kubectl apply -f k8s/dev/secret.yaml
+kubectl apply -f k8s/dev/deployment.yaml
+kubectl rollout restart deployment/auth-service -n gym-dev
+```
 
-## Notes / TODO before this is production-shaped
+### Debugging checklist
 
-- Move `JWT_SECRET` and `DATABASE_URL` out of the k8s Secret YAML and into
-  AWS Secrets Manager / SSM Parameter Store once deployed to EKS, and swap
-  the local Postgres container for AWS RDS in production.
-- Add refresh tokens if 1-hour access tokens prove too short for the
-  mobile app's needs.
+```bash
+kubectl get pods -n gym-dev                                   # is everything Running?
+kubectl logs deployment/auth-service -n gym-dev                # app-level errors
+kubectl logs deployment/auth-postgres -n gym-dev                # database-level errors
+kubectl describe pod <pod-name> -n gym-dev                       # image pull errors, missing secrets, failed probes
+kubectl get secrets -n gym-dev                                   # does auth-postgres-credentials actually exist?
+kubectl exec -it deployment/auth-service -n gym-dev -- env | grep -E "DB_|JWT"   # are the expected env vars actually set inside the pod?
+kubectl get deployment auth-service -n gym-dev -o yaml | grep -A 30 "env:"        # does the LIVE cluster spec match your local file?
+```
+
+Common causes, in order of likelihood if something fails after a fresh
+setup:
+1. `auth-postgres-credentials` secret wasn't generated before the database
+   Deployment was applied (fixed by re-running the generator script, then
+   deleting the crash-looping pod so it retries).
+2. A YAML edit was made locally but never actually `kubectl apply`'d — the
+   cluster is still running an older spec.
+3. Stale PVC data from an earlier failed attempt — Postgres only runs its
+   `POSTGRES_DB` init logic on a genuinely empty data directory. If the
+   database name looks wrong, delete both the Deployment and PVC and
+   recreate from scratch (this wipes local dev data, which is fine here).
+
+### Notes
+
+- When running inside the cluster, database connection details come from
+  `auth-postgres-credentials` (username/password) and
+  `auth-service-config` (host/port) — never a single `DATABASE_URL`
+  string, so credentials are never duplicated across multiple Secrets.
+- Once deployed to AWS/EKS, `auth-postgres` (the in-cluster Postgres pod)
+  gets replaced with a real AWS RDS endpoint — only the `DB_HOST` value
+  changes; the app code and the shape of these manifests stay the same.
