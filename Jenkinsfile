@@ -67,7 +67,7 @@ pipeline {
             steps {
                 echo '🔐 Ensuring ExternalSecret & ConfigMap exist before DB Job execution...'
                 sh "kubectl apply -f ${env.KUBERNETES_DIR}/configmap.yaml"
-                sh "kubectl apply -f ${env.KUBERNETES_DIR}/external-secret.yaml"
+                sh "kubectl apply -f ${env.KUBERNETES_DIR}/secret.yaml"
                 sh "kubectl apply -f ${env.KUBERNETES_DIR}/db-schema-configmap.yaml"
                 
                 echo '🗄️ Triggering database schema migration Job...'
