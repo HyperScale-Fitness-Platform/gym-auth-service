@@ -29,8 +29,14 @@ spec:
                   key: POSTGRES_PASSWORD
             - name: PGDATABASE
               value: "gym_auth"
-          command: ["psql"]
-          args: ["-f", "/migrations/schema.sql"]
+          command: ["sh", "-c"]
+          args:
+            - |
+              echo "Ensuring target database 'gym_auth' exists..."
+              psql -d postgres -c "CREATE DATABASE gym_auth;" 2>/dev/null || echo "Database gym_auth already exists."
+              
+              echo "Applying schema migrations..."
+              psql -d gym_auth -f /migrations/schema.sql
           volumeMounts:
             - name: migration-sql
               mountPath: /migrations
