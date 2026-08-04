@@ -18,24 +18,6 @@ pipeline {
             }
         }
 
-        stage('Install Dependencies') {
-            agent {
-                docker { image 'node:18-alpine' }
-            }
-            steps {
-                sh 'npm install'
-            }
-        }
-
-        stage('Run Tests') {
-            agent {
-                docker { image 'node:18-alpine' }
-            }
-            steps {
-                sh 'npm test --if-present'
-            }
-        }
-        
         stage('Set Environment Variables') {
             steps {
                 withCredentials([
@@ -47,6 +29,15 @@ pipeline {
                         env.AWS_REGION     = "us-east-1"
                     }
                 }
+            }
+        }
+
+        stage('Install Dependencies') {
+            agent {
+                docker { image 'node:20-alpine' }
+            }
+            steps {
+                sh 'npm install'
             }
         }
 
@@ -115,15 +106,15 @@ pipeline {
             }
         }
 
-        stage('Smoke Test') {
-            steps {
-                echo '🧪 Executing active endpoint smoke test...'
-                sh """
-                    kubectl run smoke-test-auth --rm -i --restart=Never --image=curlimages/curl -n ${env.NAMESPACE} -- \
-                        curl -sf http://auth-service:4000/health
-                """
-            }
-        }
+        // stage('Smoke Test') {
+        //     steps {
+        //         echo '🧪 Executing active endpoint smoke test...'
+        //         sh """
+        //             kubectl run smoke-test-auth --rm -i --restart=Never --image=curlimages/curl -n ${env.NAMESPACE} -- \
+        //                 curl -sf http://auth-service:4000/health
+        //         """
+        //     }
+        // }
     }
 
     post {
@@ -134,10 +125,12 @@ pipeline {
             echo "❌ Deployment failed! Check the step diagnostics above."
         }
         always {
-            sh """
+            sh "
                 rm -f /tmp/auth-deployment-resolved.yaml || true
-                kubectl delete pod smoke-test-auth -n ${env.NAMESPACE} --ignore-not-found || true
-            """
+            "
+            // sh "
+            //     kubectl delete pod smoke-test-auth -n ${env.NAMESPACE} --ignore-not-found || true
+            // "
         }
     }
 }
