@@ -14,7 +14,7 @@ spec:
           image: postgres:16
           env:
             - name: PGHOST
-              value: "auth-postgres.<region>.rds.amazonaws.com" 
+              value: "<db-endpoint>"
             - name: PGPORT
               value: "5432"
             - name: PGUSER

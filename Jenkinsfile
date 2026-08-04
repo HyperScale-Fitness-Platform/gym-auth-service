@@ -69,20 +69,46 @@ pipeline {
                 sh "kubectl apply -f ${env.KUBERNETES_DIR}/configmap.yaml"
                 sh "kubectl apply -f ${env.KUBERNETES_DIR}/secret.yaml"
                 sh "kubectl apply -f ${env.KUBERNETES_DIR}/db-schema-configmap.yaml"
-        
-                echo '🗄️ Triggering database schema migration Job...'
+                
+                echo '⏳ Waiting for Kubernetes secret synchronization...'
                 sh """
+                    for i in \$(seq 1 12); do
+                        if kubectl get secret auth-svc-credentials -n ${env.NAMESPACE} >/dev/null 2>&1; then
+                            echo "✅ Secret auth-svc-credentials present!"
+                            break
+                        fi
+                        echo "Waiting for auth-svc-credentials secret creation..."
+                        sleep 5
+                    done
+                """
+
+                echo '🗄️ Fetching RDS endpoint dynamically & triggering migration Job...'
+                sh """
+                    # Query actual RDS Endpoint Address from AWS API
+                    RDS_HOST=\$(aws rds describe-db-instances \
+                        --region ${env.AWS_REGION} \
+                        --query "DBInstances[?contains(DBInstanceIdentifier, 'auth-postgres')].Endpoint.Address" \
+                        --output text)
+
+                    if [ -z "\$RDS_HOST" ] || [ "\$RDS_HOST" = "None" ]; then
+                        # Fallback query if instance identifier naming differs
+                        RDS_HOST=\$(aws rds describe-db-instances --region ${env.AWS_REGION} --query "DBInstances[0].Endpoint.Address" --output text)
+                    fi
+
+                    echo "Connecting to RDS Host: \$RDS_HOST"
+
                     temp_job=\$(mktemp)
                     
-                    sed -e "s|<region>|${env.AWS_REGION}|g" \
+                    sed -e "s|<db-endpoint>|\$RDS_HOST|g" \
+                        -e "s|<region>|${env.AWS_REGION}|g" \
                         -e "s|<account-id>|${env.AWS_ACCOUNT_ID}|g" \
                         ${env.KUBERNETES_DIR}/db-migrate-job.yaml > \$temp_job
-        
+
                     kubectl delete job auth-db-migrate -n ${env.NAMESPACE} --ignore-not-found
                     kubectl apply -f \$temp_job
                     rm -f \$temp_job
-        
-                    kubectl wait --for=condition=complete job/auth-db-migrate -n ${env.NAMESPACE} --timeout=90s
+
+                    kubectl wait --for=condition=complete job/auth-db-migrate -n ${env.NAMESPACE} --timeout=120s
                 """
             }
         }
