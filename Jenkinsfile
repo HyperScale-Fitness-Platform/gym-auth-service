@@ -69,11 +69,21 @@ pipeline {
                 sh "kubectl apply -f ${env.KUBERNETES_DIR}/configmap.yaml"
                 sh "kubectl apply -f ${env.KUBERNETES_DIR}/secret.yaml"
                 sh "kubectl apply -f ${env.KUBERNETES_DIR}/db-schema-configmap.yaml"
-                
+        
                 echo '🗄️ Triggering database schema migration Job...'
-                sh "kubectl delete job auth-db-migrate -n ${env.NAMESPACE} --ignore-not-found"
-                sh "kubectl apply -f ${env.KUBERNETES_DIR}/db-migrate-job.yaml"
-                sh "kubectl wait --for=condition=complete job/auth-db-migrate -n ${env.NAMESPACE} --timeout=90s"
+                sh """
+                    temp_job=\$(mktemp)
+                    
+                    sed -e "s|<region>|${env.AWS_REGION}|g" \
+                        -e "s|<account-id>|${env.AWS_ACCOUNT_ID}|g" \
+                        ${env.KUBERNETES_DIR}/db-migrate-job.yaml > \$temp_job
+        
+                    kubectl delete job auth-db-migrate -n ${env.NAMESPACE} --ignore-not-found
+                    kubectl apply -f \$temp_job
+                    rm -f \$temp_job
+        
+                    kubectl wait --for=condition=complete job/auth-db-migrate -n ${env.NAMESPACE} --timeout=90s
+                """
             }
         }
 

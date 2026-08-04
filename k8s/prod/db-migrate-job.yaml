@@ -20,12 +20,12 @@ spec:
             - name: PGUSER
               valueFrom:
                 secretKeyRef:
-                  name: auth-rds-credentials
+                  name: auth-svc-credentials
                   key: POSTGRES_USER
             - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: auth-rds-credentials
+                  name: auth-svc-credentials
                   key: POSTGRES_PASSWORD
             - name: PGDATABASE
               value: "gym_auth"
