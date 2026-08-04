@@ -116,9 +116,7 @@ pipeline {
             echo "❌ Deployment failed! Check the step diagnostics above."
         }
         always {
-            sh "
-                rm -f /tmp/auth-deployment-resolved.yaml || true
-            "
+            sh "rm -f /tmp/auth-deployment-resolved.yaml || true"
             // sh "
             //     kubectl delete pod smoke-test-auth -n ${env.NAMESPACE} --ignore-not-found || true
             // "
