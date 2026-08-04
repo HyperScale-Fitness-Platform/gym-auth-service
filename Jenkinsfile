@@ -15,7 +15,8 @@ pipeline {
         AWS_ACCESS_KEY_ID     = credentials('aws-access-key-id')
         AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key')
         AWS_ACCOUNT_ID        = credentials('aws-account-id')
-
+    }
+    
     stages {
         stage('Checkout') {
             steps {
