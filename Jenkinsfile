@@ -6,29 +6,20 @@ pipeline {
         ECR_REPO_NAME  = "gym-auth-service"
         KUBERNETES_DIR = "${WORKSPACE}/k8s/prod"
         NAMESPACE      = "gym-dev"
+        AWS_REGION     = "us-east-1"
         
         // Safe evaluation fallback for Git SHA
         IMAGE_TAG      = "${env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : 'latest'}"
-    }
+
+        // Jenkins Credentials Store bindings (Available globally across all stages & post block)
+        AWS_ACCESS_KEY_ID     = credentials('aws-access-key-id')
+        AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key')
+        AWS_ACCOUNT_ID        = credentials('aws-account-id')
 
     stages {
         stage('Checkout') {
             steps {
                 checkout scm
-            }
-        }
-
-        stage('Set Environment Variables') {
-            steps {
-                withCredentials([
-                    string(credentialsId: 'aws-access-key-id', variable: 'AWS_ACCESS_KEY_ID'),
-                    string(credentialsId: 'aws-secret-access-key', variable: 'AWS_SECRET_ACCESS_KEY'),
-                    string(credentialsId: 'aws-account-id', variable: 'AWS_ACCOUNT_ID')
-                ]) {
-                    script {
-                        env.AWS_REGION     = "us-east-1"
-                    }
-                }
             }
         }
 
