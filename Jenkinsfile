@@ -16,7 +16,7 @@ pipeline {
         AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key')
         AWS_ACCOUNT_ID        = credentials('aws-account-id')
     }
-    
+
     stages {
         stage('Checkout') {
             steps {
@@ -59,7 +59,7 @@ pipeline {
         stage('Authenticate to EKS') {
             steps {
                 echo '🛡️ Updating cluster context connection...'
-                sh "aws eks update-kubeconfig --region ${env.AWS_REGION} --name gym-cluster-dev"
+                sh "aws eks update-kubeconfig --region ${env.AWS_REGION} --name gym-cluster"
             }
         }
 
