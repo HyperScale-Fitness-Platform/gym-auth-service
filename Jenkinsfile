@@ -30,23 +30,15 @@ pipeline {
             }
         }
         
-        stage('Load Environment Configuration') {
+        stage('Set Environment Variables') {
             steps {
-                script {
-                    if (fileExists('.env')) {
-                        echo "⚙️ Sourcing environment configuration parameters..."
-                        def props = readProperties file: '.env'
-                        env.AWS_ACCESS_KEY_ID     = props['AWS_ACCESS_KEY_ID']
-                        env.AWS_SECRET_ACCESS_KEY = props['AWS_SECRET_ACCESS_KEY']
-                        env.AWS_REGION            = props['AWS_REGION']
-                        env.AWS_ACCOUNT_ID         = props['AWS_ACCOUNT_ID']
-                        
-                        // Recalculate IMAGE_TAG if git hash wasn't present at pipeline initiation
-                        if (env.IMAGE_TAG == 'latest') {
-                            env.IMAGE_TAG = sh(script: "git rev-parse --short HEAD || echo latest", returnStdout: true).trim()
-                        }
-                    } else {
-                        error "❌ Error: .env file missing in workspace root."
+                withCredentials([
+                    string(credentialsId: 'aws-access-key-id', variable: 'AWS_ACCESS_KEY_ID'),
+                    string(credentialsId: 'aws-secret-access-key', variable: 'AWS_SECRET_ACCESS_KEY'),
+                    string(credentialsId: 'aws-account-id', variable: 'AWS_ACCOUNT_ID')
+                ]) {
+                    script {
+                        env.AWS_REGION     = "us-east-1"
                     }
                 }
             }

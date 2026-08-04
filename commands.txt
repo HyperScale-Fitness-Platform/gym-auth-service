@@ -1,0 +1,5 @@
+docker cp ~/Desktop/gym-auth-service/.env d684b44b1cb3:/var/jenkins_home/workspace/gym-auth-svc-deployment/
+
+docker cp ~/Desktop/gym-auth-service/src d684b44b1cb3:/var/jenkins_home/workspace/gym-auth-svc-deployment/
+
+docker cp ~/Desktop/gym-auth-service/k8s d684b44b1cb3:/var/jenkins_home/workspace/gym-auth-svc-deployment/
