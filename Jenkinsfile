@@ -115,20 +115,42 @@ pipeline {
 
         stage('Deploy to Kubernetes') {
             steps {
-                echo '🚀 Deploying Auth Service rollout update...'
+                echo '🚀 Deploying Auth Service & Dynamic Configurations...'
                 sh """
-                    temp_manifest=\$(mktemp)
-                    
+                    # 1. Fetch live RDS endpoint address from AWS RDS API
+                    RDS_HOST=\$(aws rds describe-db-instances \
+                        --region ${env.AWS_REGION} \
+                        --query "DBInstances[?contains(DBInstanceIdentifier, 'auth-postgres')].Endpoint.Address" \
+                        --output text)
+
+                    if [ -z "\$RDS_HOST" ] || [ "\$RDS_HOST" = "None" ]; then
+                        echo "⚠️ Fallback: Querying first available RDS instance"
+                        RDS_HOST=\$(aws rds describe-db-instances --region ${env.AWS_REGION} --query "DBInstances[0].Endpoint.Address" --output text)
+                    fi
+
+                    echo "Injecting RDS Host into ConfigMap: \$RDS_HOST"
+
+                    # 2. Substitute dynamic endpoint into ConfigMap
+                    temp_cm=\$(mktemp)
+                    sed "s|<db-endpoint>|\$RDS_HOST|g" ${env.KUBERNETES_DIR}/configmap.yaml > \$temp_cm
+                    kubectl apply -f \$temp_cm
+                    rm -f \$temp_cm
+
+                    # 3. Substitute image tag and AWS variables into Deployment
+                    temp_deployment=\$(mktemp)
                     sed -e "s|<account-id>|${env.AWS_ACCOUNT_ID}|g" \
                         -e "s|<region>|${env.AWS_REGION}|g" \
                         -e "s|:latest|:${env.IMAGE_TAG}|g" \
-                        ${env.KUBERNETES_DIR}/deployment.yaml > \$temp_manifest
+                        ${env.KUBERNETES_DIR}/deployment.yaml > \$temp_deployment
 
-                    kubectl apply -f \$temp_manifest
+                    kubectl apply -f \$temp_deployment
                     kubectl apply -f ${env.KUBERNETES_DIR}/service.yaml
-                    
-                    rm -f \$temp_manifest
+                    rm -f \$temp_deployment
 
+                    # 4. Trigger rollout restart to force pods to consume updated ConfigMap values
+                    kubectl rollout restart deployment/auth-service -n ${env.NAMESPACE}
+
+                    # 5. Wait for deployment rollout to complete
                     kubectl rollout status deployment/auth-service -n ${env.NAMESPACE} --timeout=90s
                 """
             }

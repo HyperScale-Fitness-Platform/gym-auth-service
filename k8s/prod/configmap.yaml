@@ -5,8 +5,8 @@ metadata:
   namespace: gym-dev
 data:
   PORT: "4000"
-  DB_HOST: "${rds_endpoint_from_terraform}"
+  DB_HOST: "<db-endpoint>"
   DB_PORT: "5432"
-  DB_NAME: "gym_auth_dev"
+  DB_NAME: "gym_auth"
   SALT_ROUNDS: "10"
   JWT_EXPIRY: "1h"
