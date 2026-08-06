@@ -1,14 +1,13 @@
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const userModel = require("../models/user.model");
+const { producer } = require("../config/kafka");
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRY = process.env.JWT_EXPIRY;
-// SALT_ROUNDS controls how computationally expensive password hashing is.
-// Higher = more secure but slower. 10 is a reasonable default for now.
 const PASSWORD_SALT_ROUNDS = parseInt(process.env.PASSWORD_SALT_ROUNDS, 10);
 
-async function register({ email, password, role, phone }) {
+async function register({ email, password, role, phone, full_name, bio, gender, photo_url }) {
   if (!email || !password || !role) {
     throw { status: 400, message: "email, password, and role are required" };
   }
@@ -18,14 +17,41 @@ async function register({ email, password, role, phone }) {
     throw { status: 409, message: "user already exists" };
   }
 
-  // bcrypt.hash() turns it into a one-way hash — even if your database were leaked, the original
-  // passwords couldn't be recovered from what's stored.
   const passwordHash = await bcrypt.hash(password, PASSWORD_SALT_ROUNDS);
+  
   const user = await userModel.create({ email, passwordHash, role, phone });
+
+  if (role === "trainer") {
+    await producer.send({
+      topic: "trainer_creation",
+      messages: [{
+        key: user.id, 
+        value: JSON.stringify({
+          id: user.id,
+          full_name,
+          bio,
+          gender,
+          photo_url
+        }),
+      }],
+    });
+  } else if (role === "customer") {
+    await producer.send({
+      topic: "customer_creation",
+      messages: [{
+        key: user.id, 
+        value: JSON.stringify({
+          id: user.id,
+          full_name,
+          gender,
+          photo_url
+        }),
+      }],
+    });
+  }
 
   return { id: user.id, email: user.email, role: user.role };
 }
-
 
 async function login({ email, password }) {
   const user = await userModel.findByEmail(email);
@@ -33,8 +59,6 @@ async function login({ email, password }) {
     throw { status: 401, message: "invalid credentials" };
   }
 
-  // bcrypt.compare hashes the incoming password the same way and checks
-  // if it matches the stored hash — you can never "unhash" to compare directly.
   const passwordMatches = await bcrypt.compare(password, user.password_hash);
   if (!passwordMatches) {
     throw { status: 401, message: "invalid credentials" };
@@ -58,4 +82,64 @@ function verifyToken(token) {
   }
 }
 
-module.exports = { register, login, verifyToken };
+async function deleteUser(id) {
+  if (!id) {
+    throw { status: 400, message: "user id is required" };
+  }
+
+  // 1. Delete from Auth database first (You must implement deleteById in user.model.js)
+  const deletedCount = await userModel.deleteById(id);
+  
+  if (deletedCount === 0) {
+    throw { status: 404, message: "user not found" };
+  }
+
+  // 2. Publish deletion event to Kafka
+  await producer.send({
+    topic: "deleted_users",
+    messages: [{
+      key: id, 
+      value: JSON.stringify({ id }),
+    }],
+  });
+
+  return { message: "user deleted successfully" };
+}
+
+
+async function updateUser(id, { email, password }) {
+  if (!id) {
+    throw { status: 400, message: "user id is required" };
+  }
+  if (!email && !password) {
+    throw { status: 400, message: "either email or password is required to update" };
+  }
+
+  const updates = {};
+
+  // 1. Handle Email Update
+  if (email) {
+    const existingUser = await userModel.findByEmail(email);
+    // If the email exists and belongs to a DIFFERENT user, block it
+    if (existingUser && existingUser.id !== id) {
+      throw { status: 409, message: "email already in use by another account" };
+    }
+    updates.email = email;
+  }
+
+  // 2. Handle Password Update
+  if (password) {
+    updates.passwordHash = await bcrypt.hash(password, PASSWORD_SALT_ROUNDS);
+  }
+
+  // 3. Execute DB Update
+  const updatedUser = await userModel.updateById(id, updates);
+  
+  if (!updatedUser) {
+    throw { status: 404, message: "user not found or update failed" };
+  }
+
+  return { id: updatedUser.id, email: updatedUser.email, role: updatedUser.role };
+}
+
+module.exports = { register, login, verifyToken, deleteUser,updateUser };
