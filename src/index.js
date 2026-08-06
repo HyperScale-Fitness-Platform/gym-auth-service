@@ -26,7 +26,7 @@ app.use("/auth", authRoutes);
 
 app.use(errorHandler);
 
-const PORT = process.env.PORT || 4001;
+const PORT = process.env.PORT || 4000;
 
 async function startServer() {
   try {

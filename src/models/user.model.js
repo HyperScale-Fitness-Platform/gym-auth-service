@@ -54,6 +54,12 @@ async function updateById(id, updates) {
     paramIndex++;
   }
 
+  if (typeof updates.isActive === "boolean") {
+    setClause.push(`is_active = $${paramIndex}`);
+    values.push(updates.isActive);
+    paramIndex++;
+  }
+
   // If nothing was passed to update, abort to prevent a SQL syntax error
   if (setClause.length === 0) return null; 
 

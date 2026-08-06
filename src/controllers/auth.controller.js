@@ -51,4 +51,14 @@ async function updateUser(req, res, next) {
   }
 }
 
-module.exports = { register, login, verify, deleteUser, updateUser };
+async function getUserStatus(req, res, next) {
+  try {
+    const { id } = req.params;
+    const result = await authService.getUserStatus(id);
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { register, login, verify, deleteUser, updateUser, getUserStatus };

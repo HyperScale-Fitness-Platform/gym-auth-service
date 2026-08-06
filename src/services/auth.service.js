@@ -44,7 +44,7 @@ async function register({ email, password, role, phone, full_name, bio, gender, 
           id: user.id,
           full_name,
           gender,
-          photo_url
+          phone
         }),
       }],
     });
@@ -107,12 +107,15 @@ async function deleteUser(id) {
 }
 
 
-async function updateUser(id, { email, password }) {
+async function updateUser(id, { email, password, is_active, old_password, new_password }) {
   if (!id) {
     throw { status: 400, message: "user id is required" };
   }
-  if (!email && !password) {
-    throw { status: 400, message: "either email or password is required to update" };
+  const hasEmail = !!email;
+  const hasPassword = !!password || (!!old_password && !!new_password);
+  const hasIsActive = typeof is_active === "boolean";
+  if (!hasEmail && !hasPassword && !hasIsActive) {
+    throw { status: 400, message: "either email, password, or is_active is required to update" };
   }
 
   const updates = {};
@@ -128,11 +131,27 @@ async function updateUser(id, { email, password }) {
   }
 
   // 2. Handle Password Update
-  if (password) {
-    updates.passwordHash = await bcrypt.hash(password, PASSWORD_SALT_ROUNDS);
+  if (hasPassword) {
+    const user = await userModel.findById(id);
+    if (!user) {
+      throw { status: 404, message: "user not found" };
+    }
+    // If old_password is provided, verify it matches before changing
+    if (old_password) {
+      const matches = await bcrypt.compare(old_password, user.password_hash);
+      if (!matches) {
+        throw { status: 401, message: "old password is incorrect" };
+      }
+    }
+    updates.passwordHash = await bcrypt.hash(password || new_password, PASSWORD_SALT_ROUNDS);
   }
 
-  // 3. Execute DB Update
+  // 3. Handle is_active Update
+  if (typeof is_active === "boolean") {
+    updates.isActive = is_active;
+  }
+
+  // 4. Execute DB Update
   const updatedUser = await userModel.updateById(id, updates);
   
   if (!updatedUser) {
@@ -142,4 +161,17 @@ async function updateUser(id, { email, password }) {
   return { id: updatedUser.id, email: updatedUser.email, role: updatedUser.role };
 }
 
-module.exports = { register, login, verifyToken, deleteUser,updateUser };
+async function getUserStatus(id) {
+  if (!id) {
+    throw { status: 400, message: "user id is required" };
+  }
+
+  const user = await userModel.findById(id);
+  if (!user) {
+    throw { status: 404, message: "user not found" };
+  }
+
+  return { id: user.id, is_active: user.is_active };
+}
+
+module.exports = { register, login, verifyToken, deleteUser, updateUser, getUserStatus };
