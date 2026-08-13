@@ -49,7 +49,6 @@ pipeline {
 
         stage('Install Dependencies') {
             steps {
-                // Route to the Node container
                 container('node') {
                     sh 'npm install'
                 }
@@ -58,17 +57,18 @@ pipeline {
 
         stage('ECR Authentication') {
             steps {
-                // Route to the Docker container
+                echo '🔐 Fetching ECR password via AWS container...'
+                
+                container('aws-k8s') {
+                    sh "aws ecr get-login-password --region ${env.AWS_REGION} > ecr-pass.txt"
+                }
+                
                 container('docker') {
-                    sh '''
-                        # Wait for the DinD daemon to initialize before interacting with it
-                        until docker info >/dev/null 2>&1; do echo "Waiting for docker daemon..."; sleep 2; done
-                        
-                        # The docker image is alpine-based; install aws-cli quickly to get the ECR password
-                        apk add --no-cache aws-cli
-                    '''
-                    echo '🔐 Authenticating Docker daemon with AWS ECR...'
-                    sh "aws ecr get-login-password --region ${env.AWS_REGION} | docker login --username AWS --password-stdin ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
+                    sh """
+                        until docker info >/dev/null 2>&1; do sleep 2; done
+                        cat ecr-pass.txt | docker login --username AWS --password-stdin ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com
+                        rm -f ecr-pass.txt
+                    """
                 }
             }
         }
@@ -95,7 +95,6 @@ pipeline {
 
         stage('Authenticate to EKS') {
             steps {
-                // Route to the AWS/K8s tools container
                 container('aws-k8s') {
                     echo '🛡️ Updating cluster context connection...'
                     sh "aws eks update-kubeconfig --region ${env.AWS_REGION} --name gym-cluster"
