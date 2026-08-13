@@ -10,3 +10,4 @@ data:
   DB_NAME: "gym_auth"
   SALT_ROUNDS: "10"
   JWT_EXPIRY: "1h"
+  KAFKA_BROKERS: "kafka-service:9092"
