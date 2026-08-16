@@ -77,18 +77,22 @@ pipeline {
                         
                         cd gitops-repo/services/auth-service/overlays/${params.ENVIRONMENT}
 
-                        # Update Kustomization image tag
-                        kustomize edit set image ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}=${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:${env.IMAGE_TAG}
+                        # Update newTag in kustomization.yaml using sed
+                        sed -i.bak -E 's/(newTag:[[:space:]]*).*/\\1"${env.IMAGE_TAG}"/' kustomization.yaml
+                        rm -f kustomization.yaml.bak
 
                         git config user.email "jenkins@gym-platform.com"
                         git config user.name "Jenkins CI"
                         
                         git add kustomization.yaml
-                        git commit -m "ci(auth-service): update ${params.ENVIRONMENT} image tag -> ${env.IMAGE_TAG}"
                         
-                        # Rebase before pushing to prevent race condition conflicts if run in parallel
-                        git pull --rebase origin main
-                        git push origin main
+                        if ! git diff --cached --quiet; then
+                            git commit -m "ci(auth-service): update ${params.ENVIRONMENT} image tag -> ${env.IMAGE_TAG}"
+                            git pull --rebase origin main
+                            git push origin main
+                        else
+                            echo "No image tag changes detected. Skipping commit."
+                        fi
                     """
                 }
             }
