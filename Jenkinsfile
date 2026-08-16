@@ -70,7 +70,7 @@ pipeline {
 
         stage('Update Image Tag in GitOps Repo') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
+                withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
                     sh """
                         rm -rf gitops-repo
                         git clone https://${GIT_USER}:${GIT_TOKEN}@github.com/HyperScale-Fitness-Platform/gym-platform-gitops.git gitops-repo
