@@ -1,43 +1,28 @@
 pipeline {
-    agent {
-        kubernetes {
-            yaml '''
-            apiVersion: v1
-            kind: Pod
-            spec:
-              containers:
-              - name: node
-                image: node:20-alpine
-                command:
-                - cat
-                tty: true
-              - name: docker
-                image: docker:24-dind
-                securityContext:
-                  privileged: true
-                env:
-                - name: DOCKER_TLS_CERTDIR
-                  value: ""
-              - name: aws-k8s
-                image: alpine/k8s:1.30.0
-                command:
-                - cat
-                tty: true
-            '''
-        }
+    agent any
+
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'prod'],
+            description: 'Target environment overlay to update in GitOps'
+        )
     }
 
     environment {
-        ECR_REPO_NAME  = "gym-auth-service"
-        KUBERNETES_DIR = "${WORKSPACE}/k8s/prod"
-        NAMESPACE      = "gym-dev"
-        AWS_REGION     = "us-east-1"
-        
-        IMAGE_TAG      = "${env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : 'latest'}"
+        ECR_REPO_NAME = "gym-auth-service"
+        NAMESPACE     = "gym-dev"
+        AWS_REGION    = "us-east-1"
 
+        // Safe evaluation fallback for Git SHA
+        IMAGE_TAG     = "${env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : 'latest'}"
+
+        // AWS Credentials from Jenkins Store
         AWS_ACCESS_KEY_ID     = credentials('aws-access-key-id')
         AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key')
         AWS_ACCOUNT_ID        = credentials('aws-account-id')
+
+        GITOPS_REPO_URL = "https://github.com/HyperScale-Fitness-Platform/gym-platform-gitops.git"
     }
 
     stages {
@@ -48,144 +33,62 @@ pipeline {
         }
 
         stage('Install Dependencies') {
+            agent {
+                docker { image 'node:20-alpine' }
+            }
             steps {
-                container('node') {
-                    sh 'npm install'
-                }
+                sh 'npm install'
             }
         }
 
         stage('ECR Authentication') {
             steps {
-                echo '🔐 Fetching ECR password via AWS container...'
-                
-                container('aws-k8s') {
-                    sh "aws ecr get-login-password --region ${env.AWS_REGION} > ecr-pass.txt"
-                }
-                
-                container('docker') {
-                    sh """
-                        until docker info >/dev/null 2>&1; do sleep 2; done
-                        cat ecr-pass.txt | docker login --username AWS --password-stdin ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com
-                        rm -f ecr-pass.txt
-                    """
-                }
+                echo '🔐 Authenticating Docker daemon with AWS ECR...'
+                sh "aws ecr get-login-password --region ${env.AWS_REGION} | docker login --username AWS --password-stdin ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
             }
         }
 
         stage('Build Container Image') {
             steps {
-                container('docker') {
-                    echo "🏭 Building Docker image tagged as: ${env.IMAGE_TAG}..."
-                    sh "docker build -t ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:${env.IMAGE_TAG} ."
-                    sh "docker tag ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:${env.IMAGE_TAG} ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:latest"
-                }
+                echo "🏭 Building Docker image tagged as: ${env.IMAGE_TAG}..."
+                sh """
+                    docker build -t ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:${env.IMAGE_TAG} .
+                    docker tag ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:${env.IMAGE_TAG} ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:latest
+                """
             }
         }
 
         stage('Push Image to AWS ECR') {
             steps {
-                container('docker') {
-                    echo "🚀 Pushing image artifact [${env.IMAGE_TAG}] to AWS ECR..."
-                    sh "docker push ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:${env.IMAGE_TAG}"
-                    sh "docker push ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:latest"
-                }
+                echo "🚀 Pushing image artifact [${env.IMAGE_TAG}] to AWS ECR..."
+                sh """
+                    docker push ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:${env.IMAGE_TAG}
+                    docker push ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:latest
+                """
             }
         }
 
-        stage('Authenticate to EKS') {
+        stage('Update Image Tag in GitOps Repo') {
             steps {
-                container('aws-k8s') {
-                    echo '🛡️ Updating cluster context connection...'
-                    sh "aws eks update-kubeconfig --region ${env.AWS_REGION} --name gym-cluster"
-                }
-            }
-        }
-
-        stage('Run Database Migration') {
-            steps {
-                container('aws-k8s') {
-                    echo '🔐 Ensuring ExternalSecret & ConfigMap exist before DB Job execution...'
-                    sh "kubectl apply -f ${env.KUBERNETES_DIR}/configmap.yaml"
-                    sh "kubectl apply -f ${env.KUBERNETES_DIR}/secret.yaml"
-                    sh "kubectl apply -f ${env.KUBERNETES_DIR}/db-schema-configmap.yaml"
-                    
-                    echo '⏳ Waiting for Kubernetes secret synchronization...'
+                withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
                     sh """
-                        for i in \$(seq 1 12); do
-                            if kubectl get secret auth-svc-credentials -n ${env.NAMESPACE} >/dev/null 2>&1; then
-                                echo "✅ Secret auth-svc-credentials present!"
-                                break
-                            fi
-                            echo "Waiting for auth-svc-credentials secret creation..."
-                            sleep 5
-                        done
-                    """
-
-                    echo '🗄️ Fetching RDS endpoint dynamically & triggering migration Job...'
-                    sh """
-                        RDS_HOST=\$(aws rds describe-db-instances \
-                            --region ${env.AWS_REGION} \
-                            --query "DBInstances[?contains(DBInstanceIdentifier, 'auth-postgres')].Endpoint.Address" \
-                            --output text)
-
-                        if [ -z "\$RDS_HOST" ] || [ "\$RDS_HOST" = "None" ]; then
-                            RDS_HOST=\$(aws rds describe-db-instances --region ${env.AWS_REGION} --query "DBInstances[0].Endpoint.Address" --output text)
-                        fi
-
-                        echo "Connecting to RDS Host: \$RDS_HOST"
-
-                        temp_job=\$(mktemp)
+                        rm -rf gitops-repo
+                        git clone https://${GIT_USER}:${GIT_TOKEN}@github.com/HyperScale-Fitness-Platform/gym-platform-gitops.git gitops-repo
                         
-                        sed -e "s|<db-endpoint>|\$RDS_HOST|g" \
-                            -e "s|<region>|${env.AWS_REGION}|g" \
-                            -e "s|<account-id>|${env.AWS_ACCOUNT_ID}|g" \
-                            ${env.KUBERNETES_DIR}/db-migrate-job.yaml > \$temp_job
+                        cd gitops-repo/services/auth-service/overlays/${params.ENVIRONMENT}
 
-                        kubectl delete job auth-db-migrate -n ${env.NAMESPACE} --ignore-not-found
-                        kubectl apply -f \$temp_job
-                        rm -f \$temp_job
+                        # Update Kustomization image tag
+                        kustomize edit set image ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}=${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:${env.IMAGE_TAG}
 
-                        kubectl wait --for=condition=complete job/auth-db-migrate -n ${env.NAMESPACE} --timeout=120s
-                    """
-                }
-            }
-        }
-
-        stage('Deploy to Kubernetes') {
-            steps {
-                container('aws-k8s') {
-                    echo '🚀 Deploying Auth Service & Dynamic Configurations...'
-                    sh """
-                        RDS_HOST=\$(aws rds describe-db-instances \
-                            --region ${env.AWS_REGION} \
-                            --query "DBInstances[?contains(DBInstanceIdentifier, 'auth-postgres')].Endpoint.Address" \
-                            --output text)
-
-                        if [ -z "\$RDS_HOST" ] || [ "\$RDS_HOST" = "None" ]; then
-                            echo "⚠️ Fallback: Querying first available RDS instance"
-                            RDS_HOST=\$(aws rds describe-db-instances --region ${env.AWS_REGION} --query "DBInstances[0].Endpoint.Address" --output text)
-                        fi
-
-                        echo "Injecting RDS Host into ConfigMap: \$RDS_HOST"
-
-                        temp_cm=\$(mktemp)
-                        sed "s|<db-endpoint>|\$RDS_HOST|g" ${env.KUBERNETES_DIR}/configmap.yaml > \$temp_cm
-                        kubectl apply -f \$temp_cm
-                        rm -f \$temp_cm
-
-                        temp_deployment=\$(mktemp)
-                        sed -e "s|<account-id>|${env.AWS_ACCOUNT_ID}|g" \
-                            -e "s|<region>|${env.AWS_REGION}|g" \
-                            -e "s|:latest|:${env.IMAGE_TAG}|g" \
-                            ${env.KUBERNETES_DIR}/deployment.yaml > \$temp_deployment
-
-                        kubectl apply -f \$temp_deployment
-                        kubectl apply -f ${env.KUBERNETES_DIR}/service.yaml
-                        rm -f \$temp_deployment
-
-                        kubectl rollout restart deployment/auth-service -n ${env.NAMESPACE}
-                        kubectl rollout status deployment/auth-service -n ${env.NAMESPACE} --timeout=90s
+                        git config user.email "jenkins@gym-platform.com"
+                        git config user.name "Jenkins CI"
+                        
+                        git add kustomization.yaml
+                        git commit -m "ci(auth-service): update ${params.ENVIRONMENT} image tag -> ${env.IMAGE_TAG}"
+                        
+                        # Rebase before pushing to prevent race condition conflicts if run in parallel
+                        git pull --rebase origin main
+                        git push origin main
                     """
                 }
             }
@@ -194,13 +97,10 @@ pipeline {
 
     post {
         success {
-            echo "✅ auth-service:${env.IMAGE_TAG} successfully deployed and healthy!"
+            echo "✅ auth-service:${env.IMAGE_TAG} build complete and GitOps repo updated successfully!"
         }
         failure {
-            echo "❌ Deployment failed! Check the step diagnostics above."
-        }
-        always {
-            sh "rm -f /tmp/auth-deployment-resolved.yaml || true"
+            echo "❌ Pipeline failed! Check the step diagnostics above."
         }
     }
 }
