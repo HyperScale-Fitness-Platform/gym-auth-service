@@ -68,33 +68,16 @@ pipeline {
             }
         }
 
-        stage('Update Image Tag in GitOps Repo') {
+        stage('Build & Push Container Image') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
-                    sh """
-                        rm -rf gitops-repo
-                        git clone https://${GIT_USER}:${GIT_TOKEN}@github.com/HyperScale-Fitness-Platform/gym-platform-gitops.git gitops-repo
-                        
-                        cd gitops-repo/services/auth-service/overlays/${params.ENVIRONMENT}
-
-                        # Update newTag in kustomization.yaml using sed
-                        sed -i.bak -E 's/(newTag:[[:space:]]*).*/\\1"${env.IMAGE_TAG}"/' kustomization.yaml
-                        rm -f kustomization.yaml.bak
-
-                        git config user.email "jenkins@gym-platform.com"
-                        git config user.name "Jenkins CI"
-                        
-                        git add kustomization.yaml
-                        
-                        if ! git diff --cached --quiet; then
-                            git commit -m "ci(auth-service): update ${params.ENVIRONMENT} image tag -> ${env.IMAGE_TAG}"
-                            git pull --rebase origin main
-                            git push origin main
-                        else
-                            echo "No image tag changes detected. Skipping commit."
-                        fi
-                    """
-                }
+                sh """
+                    # Tag with both SHA (for ECR history/rollback) and latest (for deployment)
+                    docker build -t ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:${env.IMAGE_TAG} .
+                    docker tag ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:${env.IMAGE_TAG} ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:latest
+                    
+                    docker push ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:${env.IMAGE_TAG}
+                    docker push ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:latest
+                """
             }
         }
     }
