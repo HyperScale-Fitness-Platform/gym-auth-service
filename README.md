@@ -85,15 +85,7 @@ docker stop gym-postgres
 docker start gym-postgres
 ```
 
-### 3. Create the table (one-time, or after a fresh container)
-
-```bash
-docker exec -it gym-postgres psql -U postgres -d gym_auth
-```
-
-Paste the schema from the **Database** section above, then `\q` to exit.
-
-### 4. Set up environment variables
+### 3. Set up environment variables
 
 ```bash
 cp .env.example .env
@@ -108,16 +100,20 @@ DATABASE_URL=postgresql://postgres:devpass@localhost:5432/gym_auth
 SALT_ROUNDS=10
 ```
 
-### 5. Start the service
+### 4. Run migrations and start the service
 
 ```bash
+npm run migrate
 npm run dev
 ```
 
 Runs on `http://localhost:4000`.
 
+The Docker image runs the same migration command automatically before starting
+the server. Applied migrations are tracked in the `schema_migrations` table.
 
-### 6. Manual test sequence
+
+### 5. Manual test sequence
 
 ```bash
 curl -X POST http://localhost:4000/auth/register \
@@ -134,7 +130,7 @@ curl -X POST http://localhost:4000/auth/verify \
   -d '{"token":"PASTE_TOKEN_HERE"}'
 ```
 
-### 7. Confirm the data actually landed in Postgres
+### 6. Confirm the data actually landed in Postgres
 
 ```bash
 docker exec -it gym-postgres psql -U postgres -d gym_auth \
@@ -170,41 +166,22 @@ kubectl apply -f k8s/dev/database/service.yaml
 kubectl get pods -n gym-dev -w
 # Ctrl+C once auth-postgres-xxxxxxxx-xxxxx is Running
 
-# 2. create the users table inside the fresh database
-kubectl exec -it deployment/auth-postgres -n gym-dev -- \
-  psql -U $(kubectl get secret auth-postgres-credentials -n gym-dev -o jsonpath='{.data.POSTGRES_USER}' | base64 -d) \
-  -d auth_db
-```
-
-Paste this schema once connected, then `\q` to exit:
-```sql
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
-
-CREATE TABLE users (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  email VARCHAR(255) UNIQUE NOT NULL,
-  password_hash VARCHAR(255) NOT NULL,
-  role VARCHAR(50) NOT NULL,
-  is_active BOOLEAN NOT NULL DEFAULT true,
-  phone VARCHAR(20),
-  created_at TIMESTAMP NOT NULL DEFAULT now()
-);
-```
-
-```bash
-# 4. build and load the app image
+# 2. build and load the app image
 docker build -t gym-auth-service:dev .
 kind load docker-image gym-auth-service:dev --name gym-dev
 
-# 5. apply the app's own config, secret, deployment, service
+# 3. apply the app's own config, secret, deployment, service
 kubectl apply -f k8s/dev/configmap.yaml
 kubectl apply -f k8s/dev/secret.yaml
 kubectl apply -f k8s/dev/deployment.yaml
 kubectl apply -f k8s/dev/service.yaml
 
-# 6. confirm both the app and its database are running
+# 4. confirm both the app and its database are running
 kubectl get pods -n gym-dev
 ```
+
+The auth-service container runs its tracked migrations before starting the
+server, so no `kubectl exec` or manual schema paste is needed.
 
 ### Testing it through the gateway
 
