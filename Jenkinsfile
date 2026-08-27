@@ -5,24 +5,21 @@ pipeline {
         choice(
             name: 'ENVIRONMENT',
             choices: ['dev', 'prod'],
-            description: 'Target environment overlay to update in GitOps'
+            description: 'Target environment'
         )
     }
 
     environment {
-        ECR_REPO_NAME = "gym-auth-service"
-        NAMESPACE     = "gym-dev"
-        AWS_REGION    = "us-east-1"
+        ECR_REPO_NAME  = "gym-auth-service"
+        AWS_REGION     = "us-east-1"
+        CLUSTER_NAME   = "gym-cluster"
+        SECRET_NAME    = "gym/dev/auth-db-credentials"
 
-        // Safe evaluation fallback for Git SHA
-        IMAGE_TAG     = "${env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : 'latest'}"
+        IMAGE_TAG      = "${env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : 'latest'}"
 
-        // AWS Credentials from Jenkins Store
         AWS_ACCESS_KEY_ID     = credentials('aws-access-key-id')
         AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key')
         AWS_ACCOUNT_ID        = credentials('aws-account-id')
-
-        GITOPS_REPO_URL = "https://github.com/HyperScale-Fitness-Platform/gym-platform-gitops.git"
     }
 
     stages {
@@ -43,14 +40,14 @@ pipeline {
 
         stage('ECR Authentication') {
             steps {
-                echo '🔐 Authenticating Docker daemon with AWS ECR...'
+                echo 'Authenticating Docker daemon with AWS ECR...'
                 sh "aws ecr get-login-password --region ${env.AWS_REGION} | docker login --username AWS --password-stdin ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
             }
         }
 
         stage('Build Container Image') {
             steps {
-                echo "🏭 Building Docker image tagged as: ${env.IMAGE_TAG}..."
+                echo "Building Docker image tagged as: ${env.IMAGE_TAG}..."
                 sh """
                     docker build -t ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:${env.IMAGE_TAG} .
                     docker tag ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:${env.IMAGE_TAG} ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:latest
@@ -60,7 +57,7 @@ pipeline {
 
         stage('Push Image to AWS ECR') {
             steps {
-                echo "🚀 Pushing image artifact [${env.IMAGE_TAG}] to AWS ECR..."
+                echo "Pushing image artifact [${env.IMAGE_TAG}] to AWS ECR..."
                 sh """
                     docker push ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:${env.IMAGE_TAG}
                     docker push ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:latest
@@ -68,26 +65,34 @@ pipeline {
             }
         }
 
-        stage('Build & Push Container Image') {
+        stage('Sync Credentials to AWS Secrets Manager') {
             steps {
-                sh """
-                    # Tag with both SHA (for ECR history/rollback) and latest (for deployment)
-                    docker build -t ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:${env.IMAGE_TAG} .
-                    docker tag ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:${env.IMAGE_TAG} ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:latest
-                    
-                    docker push ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:${env.IMAGE_TAG}
-                    docker push ${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:latest
-                """
+                echo 'Ensuring Postgres credentials exist in AWS Secrets Manager...'
+                withCredentials([usernamePassword(credentialsId: 'auth-postgres-credentials', usernameVariable: 'DB_USER', passwordVariable: 'DB_PASSWORD')]) {
+                    sh '''
+                        if aws secretsmanager describe-secret --secret-id "${SECRET_NAME}" > /dev/null 2>&1; then
+                            echo "Secret '${SECRET_NAME}' exists. Updating..."
+                            aws secretsmanager put-secret-value \
+                                --secret-id "${SECRET_NAME}" \
+                                --secret-string "{\"username\":\"${DB_USER}\",\"password\":\"${DB_PASSWORD}\"}"
+                        else
+                            echo "Creating secret '${SECRET_NAME}'..."
+                            aws secretsmanager create-secret \
+                                --name "${SECRET_NAME}" \
+                                --secret-string "{\"username\":\"${DB_USER}\",\"password\":\"${DB_PASSWORD}\"}"
+                        fi
+                    '''
+                }
             }
         }
     }
 
     post {
         success {
-            echo "✅ auth-service:${env.IMAGE_TAG} build complete and GitOps repo updated successfully!"
+            echo "gym-auth-service:${env.IMAGE_TAG} build complete and secrets synced!"
         }
         failure {
-            echo "❌ Pipeline failed! Check the step diagnostics above."
+            echo "Pipeline failed! Check step diagnostics above."
         }
     }
 }
